@@ -1,7 +1,8 @@
 # ZXLS.py
 
-from pyzx import Graph, VertexType, simplify
+from pyzx import Graph, VertexType, simplify, draw
 from sympy import symbols, pi
+
 
 class PauliFrame:
     """Tracks the classical record of byproduct corrections for each qubit."""
@@ -45,8 +46,22 @@ class ParseInstructions:
         }
         
         self.num_qubits = num_qubits
+        self.total_graph = Graph()
         self.operations = []
         self.operation_type = operation_type_lookup
+        
+        self.inputs = []
+        self.outputs = []
+        
+        for i in range(self.num_qubits):
+            in_qubit = self.total_graph.add_vertex(VertexType.BOUNDARY, qubit=i, row=0) # Control Input
+            out_qubit = self.total_graph.add_vertex(VertexType.BOUNDARY, qubit=i, row=1)
+            self.total_graph.add_edge((in_qubit, out_qubit))
+            self.inputs.append(in_qubit)
+            self.outputs.append(out_qubit)
+            
+        self.total_graph.set_inputs(self.inputs)
+        self.total_graph.set_outputs(self.outputs)
 
     def parse_file(self, file_path):
         """Parse the instructions from a file"""
@@ -68,25 +83,69 @@ class ParseInstructions:
         else:
             return False
 
-    def add_operation(self, operation):
-        """Add operation"""
+    def add_operation(self, operation, *qubits):
+        """Add operation with qubit indices"""
         if not self.validate_operation(operation):
             raise TypeError("invalid-operation")
-        self.operations.append(operation)
+        if not all(isinstance(q, int) and 0 <= q < self.num_qubits for q in qubits):
+            raise ValueError("Qubit indices must be valid integers within the range")
+        self.operations.append((operation, qubits))
+
 
     def execute_operations(self):
-        graph_r = Graph()
         
         measurement_counter = 0
-        
-        for operation in self.operations:
-            if operation == "s-split":
-                measurement_label = symbols("m"+str(measurement_counter))
-                create_smooth_split(graph_r, 0,0,1,measurement_label)
-            
-        
-        return graph_r
 
+        for operation, qubits in self.operations:
+            graph_r = Graph()
+            if operation == "s-split":
+                if len(qubits) != 3:
+                    raise ValueError("s-split operation requires 3 qubit indices: input, output1, output2")
+                q_in, q_out1, q_out2 = qubits
+                measurement_label = symbols("m" + str(measurement_counter))
+                create_smooth_split(graph_r, q_in, q_out1, q_out2, measurement_label)
+                measurement_counter += 1
+                #self.total_graph.compose(graph_r)
+                
+            elif operation == "s-merge":
+                
+                temp_inputs = []
+                temp_outputs = []
+            
+                if len(qubits) != 3:
+                    raise ValueError("s-merge operation requires 3 qubit indices: input1, input2, output1")
+                q_in1, q_in2, q_out1 = qubits
+                measurement_label = symbols("m" + str(measurement_counter))
+                in1,in2,out1 = create_smooth_merge(graph_r, q_in1, q_in2, q_out1, measurement_label)
+                measurement_counter += 1
+                
+                ## TODO: 
+                #       -- Validate that output of merge is the same qubit as either input
+                ##      -- Loop through arrays of inputs and outputs of self instead of num_qubits to set correct values
+                
+                for i in range(self.num_qubits):
+                    if i != q_in1 and i != q_in2:
+                        
+                        max_row = graph_r.depth()
+                        
+                        in_qubit = graph_r.add_vertex(VertexType.BOUNDARY, qubit=i, row=0) 
+                        out_qubit = graph_r.add_vertex(VertexType.BOUNDARY, qubit=i, row=max_row)
+                        graph_r.add_edge((in_qubit, out_qubit))
+                        temp_inputs.append(in_qubit)
+                        temp_outputs.append(out_qubit)
+                        
+                temp_inputs.append(in1)
+                temp_inputs.append(in2)
+                temp_outputs.append(out1)
+            
+                graph_r.set_inputs((temp_inputs))
+                graph_r.set_outputs((temp_outputs))
+            
+                print("Total graph: ",self.total_graph.outputs())
+                print("graph_r: ",graph_r.inputs())
+            
+                self.total_graph.compose(graph_r)
+                
     def list_operations(self):
         return self.operations
 
