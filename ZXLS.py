@@ -40,6 +40,7 @@ class ParseInstructions:
             "r-merge": {"type": "merge", "mode": "r"},
             "x-measure": {"type": "measurement", "mode":"x-basis"},
             "z-measure": {"type": "measurement", "mode":"z-basis"},
+            #add basis and state for init
             "init": {"type": "initialize", "mode": "ancilla"}
         }
         
@@ -47,6 +48,20 @@ class ParseInstructions:
         self.operations = []
         self.operation_type = operation_type_lookup
 
+    def parse_file(self, file_path):
+        """Parse the instructions from a file"""
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith("#"):  # Ignore empty lines and comments
+                parts = line.split()
+                operation = parts[0]
+                if operation not in self.operation_type:
+                    raise TypeError("invalid-operation")
+                self.operations.append(operation)
+                
     def validate_operation(self, operation):
         if operation in self.operation_type:
             return True
