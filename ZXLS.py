@@ -1,7 +1,7 @@
 # ZXLS.py
 
 from pyzx import Graph, VertexType, simplify
-from sympy import pi
+from sympy import symbols, pi
 
 class PauliFrame:
     """Tracks the classical record of byproduct corrections for each qubit."""
@@ -27,6 +27,56 @@ class PauliFrame:
     def __repr__(self):
         return f"PauliFrame({self.frame})"
 
+
+class ParseInstructions:
+    def __init__(self, num_qubits):
+        if not isinstance(num_qubits, int) or num_qubits <= 0:
+            raise ValueError("Number of qubits must be a positive integer")
+
+        operation_type_lookup = {
+            "s-split": {"type": "split", "mode": "s"},
+            "r-split": {"type": "split", "mode": "r"},
+            "s-merge": {"type": "merge", "mode": "s"},
+            "r-merge": {"type": "merge", "mode": "r"},
+            "x-measure": {"type": "measurement", "mode":"x-basis"},
+            "z-measure": {"type": "measurement", "mode":"z-basis"},
+            "init": {"type": "initialize", "mode": "ancilla"}
+        }
+        
+        self.num_qubits = num_qubits
+        self.operations = []
+        self.operation_type = operation_type_lookup
+
+    def validate_operation(self, operation):
+        if operation in self.operation_type:
+            return True
+        else:
+            return False
+
+    def add_operation(self, operation):
+        """Add operation"""
+        if not self.validate_operation(operation):
+            raise TypeError("invalid-operation")
+        self.operations.append(operation)
+
+    def execute_operations(self):
+        graph_r = Graph()
+        
+        measurement_counter = 0
+        
+        for operation in self.operations:
+            if operation == "s-split":
+                measurement_label = symbols("m"+str(measurement_counter))
+                create_smooth_split(graph_r, 0,0,1,measurement_label)
+            
+        
+        return graph_r
+
+    def list_operations(self):
+        return self.operations
+
+    def __repr__(self):
+        return f"ParseInstructions(num_qubits={self.num_qubits}, operations={self.operations})"
 
 def create_smooth_split(graph: Graph, inp: int, out1: int, out2: int, meas_outcome):
     """Create a smooth split (Z-spider) with X correction on upper output leg.
