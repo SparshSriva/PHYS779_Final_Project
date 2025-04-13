@@ -1,0 +1,10 @@
+#CNOT protocol from 1111.4022 section 4.1 on 3 qubits
+3
+#intialize qubit 1 in the |+> state
+init 1 +
+#operations between q0 q1
+s-merge 0 1
+s-split 0 1
+r-merge 1 2
+#reset ancilla
+x-measure 1
