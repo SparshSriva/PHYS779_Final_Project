@@ -27,7 +27,7 @@ class PauliFrame:
 
     def __repr__(self):
         return f"PauliFrame({self.frame})"
-        
+
 def get_boundary_vertex_by_qubit(graph, boundary_list, qubit_value):
     """
     Returns the vertex ID from `boundary_list` that corresponds to `qubit_value`.
@@ -46,6 +46,22 @@ def clean_orphan_boundaries(graph, temp_inputs, temp_outputs):
             graph.remove_vertex(v)
             
 class ParseInstructions:
+    def __get_qubits_not_involved(self, used_qubits):
+        """
+        Returns the dictionary of inputs and outputs (with their index) from the graph that do not appear in the used_qubits set.
+        """
+        qubits_inputs = {}
+        qubits_outputs = {}
+        for v in self.total_graph.inputs():
+            if self.total_graph.qubit(v) not in used_qubits:
+                qubits_inputs[v] = self.total_graph.qubit(v)
+
+        for v in self.total_graph.outputs():
+            if self.total_graph.qubit(v) not in used_qubits:
+                qubits_outputs[v] = self.total_graph.qubit(v)
+
+        return qubits_inputs, qubits_outputs
+    
     def __init__(self, num_qubits,ancilla_qubits=None):
         if not isinstance(num_qubits, int) or num_qubits <= 0:
             raise ValueError("Number of qubits must be a positive integer")
@@ -169,6 +185,9 @@ class ParseInstructions:
                     raise ValueError("s-split operation requires 3 qubit indices: input, output1, output2")
                 q_in, q_out1, q_out2 = qubits
 
+                if q_out1 != q_in:
+                    raise ValueError("output 1 must be equal to the input")
+
                 measurement_label = symbols("m" + str(measurement_counter))
                 measurement_counter += 1
 
@@ -178,9 +197,10 @@ class ParseInstructions:
                 temp_outputs.extend([upper, lower])
 
                 used_qubits = {q_out1, q_out2}
+                
+                unused_inputs, unused_outputs = self.__get_qubits_not_involved(used_qubits)
 
-                non_matching = self.get_non_matching_qubit_keys(graph_r.qubits(), check_inputs=True)
-                for i in non_matching:
+                for i in unused_inputs:
                     q = self.total_graph.qubit(i)
                     if q in used_qubits:
                         continue
@@ -190,9 +210,8 @@ class ParseInstructions:
                         graph_r.set_row(i, 0)
                         graph_r.set_qubit(i, q)
                         temp_inputs.append(i)
-
-                uncovered_output_indices = self.get_uncovered_output_indices(graph_r)
-                for i in uncovered_output_indices:
+                
+                for i in unused_outputs:
                     q = self.total_graph.qubit(i)
                     if q in used_qubits:
                         continue
@@ -202,16 +221,27 @@ class ParseInstructions:
                         graph_r.set_row(i, graph_r.depth())
                         graph_r.set_qubit(i, q)
                         temp_outputs.append(i)
-
-                        n_inp = graph_r.add_vertex(VertexType.BOUNDARY, q, 0)
-                        graph_r.add_edge((n_inp,i))
-                        temp_inputs.append(n_inp)
-
+                    
                 temp_inputs.sort()
                 temp_outputs.sort()
+                
                 graph_r.set_inputs(temp_inputs)
-                graph_r.set_outputs(temp_outputs)
-                clean_orphan_boundaries(graph_r, temp_inputs, temp_outputs)
+                graph_r.set_outputs(temp_outputs)    
+                        
+                for i in graph_r.outputs():
+                    q = graph_r.qubit(i)
+                    if q in used_qubits:
+                        continue 
+                    for j in graph_r.inputs():
+                        if graph_r.qubit(j) == q:
+                            if not graph_r.connected(j, i):
+                                graph_r.add_edge((j, i))
+                            break
+                
+                if len(graph_r.inputs()) != len(self.total_graph.outputs()):
+                    print("graph_r inputs: ", len(graph_r.inputs()))
+                    print("total_graph outputs: ", len(self.total_graph.outputs()))
+                    raise ValueError("graph_r inputs do not match total_graph outputs")
                 
                 self.total_graph.compose(graph_r)
 
@@ -230,7 +260,7 @@ class ParseInstructions:
                 q_in1, q_in2, q_out1 = qubits
                 
                 if q_out1 != q_in1 and q_out1 != q_in2:
-                    raise ValueError("outputs must be equal to one the inputs")
+                    raise ValueError("outputs must be equal to one of the inputs")
                 
                 measurement_label = symbols("m" + str(measurement_counter))
                 in1,in2,out1 = create_smooth_merge(graph_r, self.total_graph, q_in1, q_in2, q_out1, measurement_label)
@@ -392,10 +422,15 @@ class ParseInstructions:
 
 # TODO: Implement this function
 def initialize_ancillas(graph: Graph, qubits: list, basis: str):
+    return
     
-    for i in qubits:
-        q = get_boundary_vertex_by_qubit(graph, graph.inputs(), i)
     
+def max_output_index(graph: Graph):
+    """Returns the maximum output index of the graph."""
+    sorted_outputs = sorted(graph.outputs())
+
+    return sorted_outputs[-1] if sorted_outputs else None
+
 def create_smooth_split(graph: Graph, full_graph: Graph, inp: int, out1: int, out2: int, meas_outcome):
     """
     Create a smooth split (Z-spider) on `inp`, outputting to `out1` and `out2`,
@@ -416,6 +451,10 @@ def create_smooth_split(graph: Graph, full_graph: Graph, inp: int, out1: int, ou
     q_in = full_graph.qubit(inp_vert)
     row_base = full_graph.row(inp_vert)
 
+    max_out = max_output_index(full_graph)
+
+    vetices_full_graph = max_out + 1
+
     # input boundary vertex with same index as in full_graph
     graph.add_vertex_indexed(inp_vert)
     graph.set_type(inp_vert, VertexType.BOUNDARY)
@@ -423,14 +462,37 @@ def create_smooth_split(graph: Graph, full_graph: Graph, inp: int, out1: int, ou
     graph.set_row(inp_vert, row_base)
 
     # Add Z-spider 
-    split = graph.add_vertex(VertexType.Z, phase=0, qubit=inp, row=row_base + 1)
-
+    graph.add_vertex_indexed(vetices_full_graph)
+    graph.set_type(vetices_full_graph, VertexType.Z)
+    graph.set_phase(vetices_full_graph, 0)
+    graph.set_row(vetices_full_graph, row_base + 1)
+    graph.set_qubit(vetices_full_graph, inp)
+    
+    split = vetices_full_graph
+    
     # Add X correction spider 
-    correction = graph.add_vertex(VertexType.X, phase=meas_outcome * pi, qubit=out1, row=row_base + 2)
+    graph.add_vertex_indexed(vetices_full_graph+1)
+    graph.set_type(vetices_full_graph+1, VertexType.X)
+    graph.set_phase(vetices_full_graph+1, meas_outcome)
+    graph.set_row(vetices_full_graph+1, row_base + 2)
+    graph.set_qubit(vetices_full_graph+1, out1)
+
+    correction = vetices_full_graph+1
 
     # output vertices
-    upper = graph.add_vertex(VertexType.BOUNDARY, qubit=out1, row=row_base + 3)
-    lower = graph.add_vertex(VertexType.BOUNDARY, qubit=out2, row=row_base + 3)
+    graph.add_vertex_indexed(vetices_full_graph+2)
+    graph.set_type(vetices_full_graph+2, VertexType.BOUNDARY)
+    graph.set_qubit(vetices_full_graph+2, out1)
+    graph.set_row(vetices_full_graph+2, row_base + 3)
+    
+    upper = vetices_full_graph+2
+    
+    graph.add_vertex_indexed(vetices_full_graph+3)
+    graph.set_type(vetices_full_graph+3, VertexType.BOUNDARY)
+    graph.set_qubit(vetices_full_graph+3, out2)
+    graph.set_row(vetices_full_graph+3, row_base + 3)
+    
+    lower = vetices_full_graph+3
 
     graph.add_edges([
         (inp_vert, split),
@@ -461,7 +523,7 @@ def create_rough_split(graph: Graph, inp: int, out1: int, out2: int, meas_outcom
 
     inp_vert = graph.add_vertex(VertexType.BOUNDARY, qubit=inp, row=0)
     split = graph.add_vertex(VertexType.X, phase=0, qubit=inp, row=1)
-    correction = graph.add_vertex(VertexType.Z, phase=meas_outcome*pi, qubit=out1, row=2)
+    correction = graph.add_vertex(VertexType.Z, phase=meas_outcome, qubit=out1, row=2)
     upper = graph.add_vertex(VertexType.BOUNDARY, qubit=out1, row=3)
     lower = graph.add_vertex(VertexType.BOUNDARY, qubit=out2, row=3)
 
@@ -520,7 +582,7 @@ def create_smooth_merge(graph: Graph, full_graph: Graph, in1: int, in2: int, out
     ## Correction  correction = graph.add_vertex(VertexType.X, phase=meas_outcome*pi, qubit=in1, row=inp_row+1)
     graph.add_vertex_indexed(last_vertex_id)
     graph.set_type(last_vertex_id, VertexType.X)
-    graph.set_phase(last_vertex_id, meas_outcome*pi)
+    graph.set_phase(last_vertex_id, meas_outcome)
     graph.set_row(last_vertex_id, full_graph.row(q_in_1)+1)
     graph.set_qubit(last_vertex_id, in1)
     
@@ -584,7 +646,7 @@ def create_rough_merge(graph: Graph, full_graph: Graph, in1: int, in2: int, out:
     ## Correction  correction = graph.add_vertex(VertexType.X, phase=meas_outcome*pi, qubit=in1, row=inp_row+1)
     graph.add_vertex_indexed(last_vertex_id)
     graph.set_type(last_vertex_id, VertexType.Z)
-    graph.set_phase(last_vertex_id, meas_outcome*pi)
+    graph.set_phase(last_vertex_id, meas_outcome)
     graph.set_row(last_vertex_id, full_graph.row(q_in_1)+1)
     graph.set_qubit(last_vertex_id, in1)
     
